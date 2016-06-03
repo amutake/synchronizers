@@ -1,6 +1,11 @@
+%%%-------------------------------------------------------------------
+%% @doc alpha synchronizer
+%% @end
+%%%-------------------------------------------------------------------
+
 -module(synchronizers_alpha).
 
--behavior(gen_server).
+-behaviour(gen_server).
 
 %% API exports
 -export([start_link/5]).
@@ -52,7 +57,7 @@
 %%====================================================================
 %% API functions
 %%====================================================================
--spec start_link(Name, Module, Args, Neighbors, Options) -> Result when
+-spec start_link(Name, Neighbors, Module, Args, Options) -> Result when
   Name :: name(),
   Module :: atom(),
   Args :: term(),
@@ -73,7 +78,7 @@ init({Mod, Name, Neighbors, Args}) ->
                     clock = 0,
                     neighbors = Neighbors,
                     expected_ack = 0,
-                    neighbors_safe = 0
+                    neighbors_safe = []
                    },
     {ok, next(SyncState, AppState)}.
 
@@ -90,12 +95,14 @@ handle_cast({ack, _Name}, {SyncState = #?STATE{name = MyName,
              end,
     NewSyncState = SyncState#?STATE{expected_ack = NewAck},
     {noreply, {NewSyncState, AppState}};
-handle_cast({safe, Name}, {SyncState = #?STATE{neighbors = Neighbors,
+handle_cast({safe, Name}, {SyncState = #?STATE{expected_ack = ExpectedAck,
+                                               neighbors = Neighbors,
                                                neighbors_safe = NeighborsSafe}, AppState}) ->
     NewNeighborsSafe = [Name|NeighborsSafe],
     NewSyncState = SyncState#?STATE{neighbors_safe = NewNeighborsSafe},
     %% TODO: optimize
-    case lists:all(fun(Neighbor) -> lists:member(Neighbor, NewNeighborsSafe) end, Neighbors) of
+    case ExpectedAck =:= 0 andalso
+        lists:all(fun(Neighbor) -> lists:member(Neighbor, NewNeighborsSafe) end, Neighbors) of
         true -> {noreply, next(NewSyncState, AppState)};
         false -> {noreply, {NewSyncState, AppState}}
     end;
@@ -139,6 +146,7 @@ send_ack(Neighbor, Name) ->
 
 -spec next(state(), app_state()) -> {state(), app_state()}.
 next(SyncState = #?STATE{module = Mod,
+                         name = Name,
                          clock = Clock,
                          neighbors = Neighbors,
                          neighbors_safe = NeighborsSafe,
@@ -146,15 +154,19 @@ next(SyncState = #?STATE{module = Mod,
     %% next pulse
     {ok, MsgDefs, AppState2} = Mod:handle_pulse(Clock + 1, AppState),
     %% receive messages
-    NewAppState = lists:fold(fun({Target, Msg}, AccState) ->
+    NewAppState = lists:foldl(fun({Target, Msg}, AccState) ->
                                      Mod:handle_message(Msg, Target, AccState)
                              end, AppState2, NextMessages),
     %% send messages to neighbors
     _ = maps:map(fun(Target, Msg) ->
-                         gen_server:cast(Target, {msg, Msg})
+                         gen_server:cast(Target, {msg, Msg, Name})
                  end, MsgDefs),
     %% reset expected_ack
     ExpectedAck = maps:size(MsgDefs),
+    ok = case ExpectedAck of
+             0 -> broadcast_safe(Neighbors, Name);
+             _ -> ok
+         end,
     %% reset neighbors_safe
     NewNeighborsSafe = lists:subtract(NeighborsSafe, Neighbors),
 
