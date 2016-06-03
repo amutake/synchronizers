@@ -5,6 +5,9 @@ Synchronizers provides some layers that enable asynchronous systems to use synch
 
 Ref: [Distributed Algorithms for Message-Passing Systems](http://www.springer.com/us/book/9783642381225), Chapter 9
 
+- synchronizers_alpha
+  - An implementation of synchronizer α
+
 Build
 -----
 
